@@ -494,42 +494,11 @@ Expected output:
 ```
 ======================= 80 passed, 2 warnings in 9.42s ========================
 ```
-tests/test_extraction.py::test_h200_family PASSED                        [ 30%]
-tests/test_extraction.py::test_b300_family PASSED                        [ 33%]
-tests/test_extraction.py::test_confidence_high_when_complete PASSED      [ 35%]
-tests/test_extraction.py::test_confidence_low_when_sparse PASSED         [ 38%]
-tests/test_extraction.py::test_no_invention PASSED                       [ 40%]
-tests/test_extraction.py::test_mock_works_offline PASSED                 [ 42%]
-tests/test_idempotency.py::test_duplicate_request_id_returns_same_result PASSED [ 45%]
-tests/test_idempotency.py::test_duplicate_does_not_create_extra_db_record PASSED [ 47%]
-tests/test_idempotency.py::test_concurrent_duplicate_requests PASSED     [ 50%]
-tests/test_inventory.py::test_full_stock_available PASSED                [ 52%]
-tests/test_inventory.py::test_stock_shortage PASSED                      [ 54%]
-tests/test_inventory.py::test_zero_stock_product PASSED                  [ 57%]
-tests/test_inventory.py::test_zero_stock_no_false_promise PASSED         [ 59%]
-tests/test_inventory.py::test_stock_shortage_function PASSED             [ 61%]
-tests/test_quotations.py::test_successful_rtx8_quotation PASSED          [ 64%]
-tests/test_quotations.py::test_clarification_requested_missing_gpu_count PASSED [ 66%]
-tests/test_quotations.py::test_pending_price_product PASSED              [ 69%]
-tests/test_quotations.py::test_unsupported_configuration PASSED          [ 71%]
-tests/test_quotations.py::test_invalid_request_body PASSED               [ 73%]
-tests/test_quotations.py::test_missing_auth_token PASSED                 [ 76%]
-tests/test_quotations.py::test_no_internal_costs_in_customer_response PASSED [ 78%]
-tests/test_security.py::test_missing_token_returns_401 PASSED            [ 80%]
-tests/test_security.py::test_invalid_token_returns_401 PASSED            [ 83%]
-tests/test_security.py::test_customer_cannot_access_internal_endpoint PASSED [ 85%]
-tests/test_security.py::test_reviewer_can_access_internal_endpoint PASSED [ 88%]
-tests/test_security.py::test_internal_costs_not_in_customer_response PASSED [ 90%]
-tests/test_security.py::test_role_in_request_body_cannot_escalate PASSED [ 92%]
-tests/test_security.py::test_token_contains_correct_role PASSED          [ 95%]
-tests/test_security.py::test_login_endpoint PASSED                       [ 97%]
-tests/test_security.py::test_login_wrong_password PASSED                 [100%]
-======================= 42 passed, 2 warnings in 2.87s ========================
-```
 
 Run code formatting and style checks:
 ```powershell
-ruff check app/ tests/
+python -m ruff check .
+python -m ruff format --check .
 ```
 
 Run the automated live demonstration:
@@ -567,6 +536,6 @@ python scripts/demo_walkthrough.py
 ## 14. Known Limitations & Future Improvements
 
 1. **User Identity Store**: Dev users are configured in memory. In enterprise production, user authentication should integrate with an external identity provider (OAuth2/OIDC, Keycloak, or Active Directory).
-2. **LLM Provider Integration**: The system currently runs in deterministic mock mode. A production deployment would connect to Google Gemini 1.5 Pro with structured function calling / Pydantic response schemas for natural language reasoning.
+2. **Live LLM Rate Limits & Upstream Quota**: When running with Google Gemini in live mode, external API rate limits or upstream 503 spikes may occur. The system implements bounded retries with exponential backoff and semantic HTTP error codes (502/503/504), but an enterprise production deployment would benefit from multi-region provider fallback.
 3. **Quotation Expiration**: Quotations currently remain indefinitely in their created status. Adding an `expires_at` column with automatic status transitions to `EXPIRED` after 14 days would be a logical next phase.
 4. **Inventory Locking**: Inventory checks are currently read-only. A reservation hold mechanism could lock stock upon draft approval.
