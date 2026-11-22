@@ -1,4 +1,4 @@
-# Rapid Stream Technology — AI Server Quotation Agent
+# Rapid Stream Technology - AI Server Quotation Agent
 
 An enterprise AI-assisted server quotation API built for **Rapid Stream Technology FZE**. 
 The system receives natural-language customer inquiries, extracts hardware specifications, matches them deterministically against an official server catalog, handles multi-turn clarifications, validates real-time inventory and pricing, enforces idempotency, and drafts formal quotation proposals for internal human review and sign-off.
