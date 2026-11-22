@@ -138,7 +138,8 @@ rapid-stream-quotation-agent/
 │   ├── test_security.py         # JWT verification, RBAC, Swagger auth, customer isolation
 │   ├── test_idempotency.py      # Sequential and concurrent duplicate handling
 │   ├── test_conversations.py    # Multi-turn clarification state tests
-│   └── test_approval.py         # Internal approval & pending-price rejection
+│   ├── test_approval.py         # Internal approval & pending-price rejection
+│   └── test_targeted_corrections.py # Numeric validation, catalog contradictions & production safeguards
 ├── scripts/
 │   ├── create_dev_tokens.py     # CLI helper to print pre-signed dev JWTs
 │   ├── demo_walkthrough.py      # Automated 10-step live demo script
@@ -148,9 +149,7 @@ rapid-stream-quotation-agent/
 ├── .gitignore
 ├── pyproject.toml               # Ruff & pytest configuration
 ├── requirements.txt
-├── README.md
-├── INTERVIEW_PREPARATION.md
-└── LIVE_CODING_PRACTICE.md
+└── README.md
 ```
 
 ---
@@ -159,24 +158,34 @@ rapid-stream-quotation-agent/
 
 Follow these exact commands in **Windows PowerShell**:
 
+### 1. Clone the repository
+
 ```powershell
-# 1. Clone or navigate to the repository
-cd d:\MINE\Assesment\rapid-stream-quotation-agent
+git clone https://github.com/najahaja/rapid-stream-quotation-agent.git
+```
 
-# 2. Create Python 3.11 virtual environment
+### 2. Navigate into the project directory
+
+```powershell
+cd rapid-stream-quotation-agent
+```
+
+### 3. Create and activate a virtual environment
+
+```powershell
 python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
 
-# 3. Activate the virtual environment
-.\.venv\Scripts\Activate.ps1
+### 4. Install dependencies
 
-# (Note: If script execution is restricted on Windows, run:)
-# Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
-
-# 4. Install dependencies
-python -m pip install --upgrade pip
+```powershell
 pip install -r requirements.txt
+```
 
-# 5. Initialize environment variables
+### 5. Initialize environment variables
+
+```powershell
 Copy-Item .env.example .env
 ```
 
