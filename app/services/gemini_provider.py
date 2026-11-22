@@ -117,7 +117,7 @@ class GeminiExtractionProvider(ExtractionProvider):
             )
 
         self.api_key = cleaned_key
-        self.model = model or getattr(settings, "gemini_model", "gemini-2.5-flash")
+        self.model = model or getattr(settings, "gemini_model", "gemini-3.1-flash-lite")
         self.timeout = timeout or getattr(settings, "gemini_timeout_seconds", 30.0)
         self.max_output_tokens = max_output_tokens or getattr(
             settings, "gemini_max_output_tokens", 1024
@@ -128,8 +128,22 @@ class GeminiExtractionProvider(ExtractionProvider):
             else getattr(settings, "gemini_max_retries", 2)
         )
 
-        # Allow client injection for unit tests
-        self._client = client or genai.Client(api_key=self.api_key)
+        # Allow client injection for unit tests.
+        # When no pre-built client is supplied we configure the HTTP layer with the
+        # configured timeout so that slow or stalled Gemini API calls are bounded.
+        if client is not None:
+            self._client = client
+        else:
+            try:
+                http_opts = types.HttpOptions(timeout=int(self.timeout * 1000))
+                self._client = genai.Client(
+                    api_key=self.api_key, http_options=http_opts
+                )
+            except Exception as exc:
+                logger.error("Failed to initialize Gemini client with timeout: %s", exc)
+                raise GeminiProviderError(
+                    f"Failed to initialize Gemini client with timeout ({self.timeout}s): {exc}"
+                ) from exc
         logger.info(
             "Initialized GeminiExtractionProvider (model=%s, timeout=%.1fs, max_tokens=%d, max_retries=%d)",
             self.model,
@@ -335,7 +349,25 @@ class GeminiExtractionProvider(ExtractionProvider):
         else:
             result.confidence = ExtractionConfidence.LOW
 
-        # ── 3. Deduplicate explicitly_stated and inferred ──
+        # ── 3. Detect extraction inconsistencies where fields listed in explicitly_stated are null ──
+        inconsistent_fields = [
+            f
+            for f in (result.explicitly_stated or [])
+            if hasattr(result, f) and getattr(result, f) is None
+        ]
+        if inconsistent_fields:
+            logger.warning(
+                "Extraction inconsistency detected: fields listed in explicitly_stated but returned as null: %s",
+                inconsistent_fields,
+            )
+            # Reconcile explicitly_stated: null fields were not actually populated
+            result.explicitly_stated = [
+                f
+                for f in (result.explicitly_stated or [])
+                if f not in inconsistent_fields
+            ]
+
+        # ── 4. Deduplicate explicitly_stated and inferred ──
         explicit_set = set(result.explicitly_stated or [])
         inferred_set = set(result.inferred or []) - explicit_set
         result.explicitly_stated = sorted(list(explicit_set))

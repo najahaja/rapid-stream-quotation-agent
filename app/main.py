@@ -4,7 +4,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, status
+from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
@@ -12,7 +12,11 @@ from app.api.routes import conversations, health, internal, quotations
 from app.config import settings
 from app.database import init_db
 from app.models.schemas import LoginRequest, TokenResponse
-from app.security.authentication import DEV_USERS, create_access_token
+from app.security.authentication import (
+    authenticate_dev_user,
+    create_access_token,
+    validate_production_configuration,
+)
 from app.services.gemini_provider import (
     GeminiAuthenticationError,
     GeminiProviderError,
@@ -66,6 +70,10 @@ def get_swagger_description() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting RST Quotation Agent (provider=%s)", settings.llm_provider)
+
+    # ── Production safeguard: refuse to start with the default dev JWT secret ──
+    validate_production_configuration()
+
     if settings.llm_provider == "gemini":
         from app.services.gemini_provider import PLACEHOLDER_KEYS
 
@@ -202,12 +210,10 @@ def login(body: LoginRequest) -> TokenResponse:
     Dev credentials:
     - customer1 / customerpass  → role: customer
     - reviewer1 / reviewerpass  → role: internal_reviewer
+
+    This endpoint is disabled when ENVIRONMENT=production.
     """
-    user = DEV_USERS.get(body.username)
-    if not user or user["password"] != body.password:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
-        )
+    user = authenticate_dev_user(body.username, body.password)
     token = create_access_token(subject=body.username, role=user["role"])
     return TokenResponse(access_token=token, role=user["role"])
 

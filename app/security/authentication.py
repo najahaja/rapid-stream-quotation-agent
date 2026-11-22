@@ -22,11 +22,48 @@ DEV_USERS = {
     "reviewer1": {"password": "reviewerpass", "role": ROLE_INTERNAL_REVIEWER},
 }
 
+# The default secret shipped in .env.example / source code.
+# If this value is still set when ENVIRONMENT=production the application must
+# refuse to start, because every token would be trivially forgeable.
+_DEFAULT_DEV_SECRET = "dev-secret-key-change-in-production"
+
 http_bearer = HTTPBearer(
     bearerFormat="JWT",
     description="Enter your JWT access token. Both raw token ('eyJ...') and prefixed ('Bearer eyJ...') are accepted.",
     auto_error=False,
 )
+
+
+def is_production() -> bool:
+    """Return True when the application is running in production mode."""
+    return getattr(settings, "environment", "development").lower() == "production"
+
+
+def validate_production_configuration(
+    environment: str | None = None, secret_key: str | None = None
+) -> None:
+    """
+    Validate that critical security settings are not using insecure development defaults
+    when running in production.
+
+    Raises RuntimeError if running in production with the default development JWT secret.
+    """
+    env = (
+        environment
+        if environment is not None
+        else getattr(settings, "environment", "development")
+    ).lower()
+    jwt_secret = (
+        secret_key
+        if secret_key is not None
+        else getattr(settings, "jwt_secret_key", "")
+    )
+    if env == "production" and jwt_secret == _DEFAULT_DEV_SECRET:
+        raise RuntimeError(
+            "Application startup aborted: JWT_SECRET_KEY is still set to the default "
+            "development value. Set a strong, randomly generated JWT_SECRET_KEY before "
+            "deploying to production."
+        )
 
 
 def create_access_token(
@@ -66,6 +103,37 @@ def decode_token(token: str) -> dict:
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def authenticate_dev_user(username: str, password: str) -> dict:
+    """
+    Authenticate against the hardcoded development user store.
+
+    Raises HTTPException(401) for invalid credentials.
+    Raises HTTPException(403) if called in a production environment —
+    the development credential store must never be reachable in production.
+    """
+    if is_production():
+        logger.error(
+            "Attempt to use development login endpoint in production environment "
+            "(username=%s). Refusing.",
+            username,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Development authentication is disabled in production. "
+                "Configure a production-grade identity provider."
+            ),
+        )
+
+    user = DEV_USERS.get(username)
+    if not user or user["password"] != password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+    return user
 
 
 def get_current_user(

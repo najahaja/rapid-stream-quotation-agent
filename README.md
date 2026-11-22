@@ -249,7 +249,7 @@ LLM_PROVIDER=mock
 ```ini
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=AIzaSy...
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.1-flash-lite
 ```
 - **Official SDK**: Built using Google's current `google-genai` Python library.
 - **Structured Schema Enforcement**: Uses `types.GenerateContentConfig` with `response_mime_type="application/json"` and `response_schema=ExtractionResult` for guaranteed JSON conformity.

@@ -107,7 +107,7 @@ def test_gemini_extraction_success_mocked(mock_genai_client):
 
     provider = GeminiExtractionProvider(
         api_key="test-mock-key-valid",
-        model="gemini-2.5-flash",
+        model="gemini-3.1-flash-lite",
         client=mock_genai_client,
     )
     result = provider.extract("I need two RST-RTX8 servers.")
@@ -533,6 +533,7 @@ def test_regression_c_sku_based_inquiry(mock_genai_client):
     assert result.confidence == ExtractionConfidence.MEDIUM
     assert result.sku == "RST-RTX8"
     assert result.num_servers == 2
+    assert result.gpu_count_per_server == 8
 
 
 def test_regression_d_ambiguous_inquiry(mock_genai_client):
@@ -802,3 +803,209 @@ def test_controlled_api_error_returns_504_on_gemini_timeout(
     )
     assert resp.status_code == 504
     assert "timed out" in resp.json()["detail"].lower()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 24. Regression: explicit SKU + quantity + GPU count all populated
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_regression_sku_with_explicit_quantity_and_gpu_count_all_populated(
+    mock_genai_client,
+):
+    """
+    Regression test for the gemini-3.5-flash-lite extraction failure where
+    the model recognized field names (listing them in explicitly_stated) but
+    returned null values for num_servers and gpu_count_per_server.
+
+    Input: "I need two RST-RTX8 servers with 8 GPUs each."
+
+    A reliable model must populate:
+      - sku = "RST-RTX8"
+      - num_servers = 2
+      - gpu_count_per_server = 8
+
+    All three must be non-null integers and present in explicitly_stated.
+    missing_fields must be empty (sku satisfies gpu_family and gpu_count
+    requirements, num_servers is provided).
+    """
+    mock_response = MagicMock()
+    mock_payload = {
+        "sku": "RST-RTX8",
+        "gpu_family": "RTX",
+        "gpu_model": None,
+        "gpu_memory_gb": None,
+        "gpu_count_per_server": 8,
+        "num_servers": 2,
+        "ram_gb": None,
+        "missing_fields": [],
+        "confidence": "HIGH",
+        "explicitly_stated": ["sku", "num_servers", "gpu_count_per_server"],
+        "inferred": ["gpu_family"],
+    }
+    mock_response.text = json.dumps(mock_payload)
+    mock_genai_client.models.generate_content.return_value = mock_response
+
+    provider = GeminiExtractionProvider(
+        api_key="test-key-valid", client=mock_genai_client
+    )
+    result = provider.extract("I need two RST-RTX8 servers with 8 GPUs each.")
+
+    # Core regression assertions: all three explicitly stated fields are populated
+    assert result.sku == "RST-RTX8"
+    assert result.num_servers == 2
+    assert result.gpu_count_per_server == 8
+
+    # Fields must appear in explicitly_stated
+    assert "sku" in result.explicitly_stated
+    assert "num_servers" in result.explicitly_stated
+    assert "gpu_count_per_server" in result.explicitly_stated
+
+    # No missing fields — SKU + num_servers + gpu_count all present
+    assert result.missing_fields == []
+
+    # Confidence HIGH: sku satisfies gpu_family, sku satisfies gpu_count,
+    # num_servers provided, gpu_memory_gb not stated → 3/4 → MEDIUM
+    # (but gpu_family is also inferred so sku + gpu_family gives 1st dimension)
+    assert result.confidence in (ExtractionConfidence.HIGH, ExtractionConfidence.MEDIUM)
+
+
+def test_regression_explicitly_stated_field_returned_null_detected_as_inconsistency(
+    mock_genai_client, caplog
+):
+    """
+    Proves that when Gemini claims a field was explicitly stated in
+    'explicitly_stated' but returns null for the field's actual value,
+    the system detects this extraction inconsistency, logs a warning,
+    reconciles explicitly_stated, and flags the missing field.
+    """
+    import logging
+
+    mock_response = MagicMock()
+    # Emulates the faulty behavior: explicitly_stated claims num_servers and gpu_count_per_server
+    # were stated, but both values are null in the JSON payload
+    mock_payload = {
+        "sku": "RST-RTX8",
+        "gpu_family": None,
+        "gpu_model": None,
+        "gpu_memory_gb": None,
+        "gpu_count_per_server": None,
+        "num_servers": None,
+        "ram_gb": None,
+        "missing_fields": [],
+        "confidence": "MEDIUM",
+        "explicitly_stated": ["sku", "num_servers", "gpu_count_per_server"],
+        "inferred": [],
+    }
+    mock_response.text = json.dumps(mock_payload)
+    mock_genai_client.models.generate_content.return_value = mock_response
+
+    provider = GeminiExtractionProvider(
+        api_key="test-key-valid", client=mock_genai_client
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = provider.extract("I need two RST-RTX8 servers with 8 GPUs each.")
+
+    # 1. Inconsistency must be detected and logged
+    assert any(
+        "Extraction inconsistency detected" in record.message
+        for record in caplog.records
+    )
+
+    # 2. Reconciles explicitly_stated: null fields are removed so downstream logic isn't misled
+    assert "sku" in result.explicitly_stated
+    assert "num_servers" not in result.explicitly_stated
+    assert "gpu_count_per_server" not in result.explicitly_stated
+
+    # 3. Missing fields are deterministically computed (num_servers is genuinely missing)
+    assert "num_servers" in result.missing_fields
+
+
+def test_regression_missing_value_never_silently_guessed_or_fabricated(
+    mock_genai_client,
+):
+    """
+    Proves that the system never silently guesses or fabricates values for
+    missing customer requirements (e.g. does not guess RTX or H200 when only
+    generic 'GPU servers' are requested).
+    """
+    mock_response = MagicMock()
+    mock_payload = {
+        "sku": None,
+        "gpu_family": None,
+        "gpu_model": None,
+        "gpu_memory_gb": None,
+        "gpu_count_per_server": None,
+        "num_servers": 2,
+        "ram_gb": None,
+        "missing_fields": ["gpu_family", "gpu_count_per_server"],
+        "confidence": "LOW",
+        "explicitly_stated": ["num_servers"],
+        "inferred": [],
+    }
+    mock_response.text = json.dumps(mock_payload)
+    mock_genai_client.models.generate_content.return_value = mock_response
+
+    provider = GeminiExtractionProvider(
+        api_key="test-key-valid", client=mock_genai_client
+    )
+    result = provider.extract("I need two GPU servers.")
+
+    # Values must remain strictly None — never guessed or defaulted
+    assert result.sku is None
+    assert result.gpu_family is None
+    assert result.gpu_model is None
+    assert result.gpu_memory_gb is None
+    assert result.gpu_count_per_server is None
+    assert result.ram_gb is None
+
+    # Missing fields must demand clarification
+    assert "gpu_family" in result.missing_fields
+    assert "gpu_count_per_server" in result.missing_fields
+
+
+def test_regression_quotation_workflow_does_not_produce_total_when_server_quantity_missing(
+    db_session, mock_genai_client, monkeypatch
+):
+    """
+    Proves that the quotation workflow does not produce an incorrect or
+    hallucinated price total when the server quantity is missing.
+    Must transition to NEEDS_CLARIFICATION with total_price=None.
+    """
+    mock_response = MagicMock()
+    mock_payload = {
+        "sku": "RST-RTX8",
+        "gpu_family": "RTX",
+        "gpu_count_per_server": 8,
+        "num_servers": None,  # Missing quantity
+        "missing_fields": ["num_servers"],
+        "confidence": "MEDIUM",
+        "explicitly_stated": ["sku", "gpu_count_per_server"],
+        "inferred": [],
+    }
+    mock_response.text = json.dumps(mock_payload)
+    mock_genai_client.models.generate_content.return_value = mock_response
+
+    mock_provider = GeminiExtractionProvider(
+        api_key="test-key-valid", client=mock_genai_client
+    )
+    monkeypatch.setattr(
+        "app.services.quotation.get_active_extraction_provider",
+        lambda: mock_provider,
+    )
+
+    req = QuotationRequest(
+        request_id="req-gemini-no-qty-001",
+        conversation_id="conv-gemini-no-qty-001",
+        message="I need RST-RTX8 servers with 8 GPUs.",
+    )
+    resp = process_quotation(
+        req, db_session, current_user={"sub": "customer1", "role": "customer"}
+    )
+
+    # Must transition to NEEDS_CLARIFICATION, never calculate a price
+    assert resp.status == QuotationStatus.NEEDS_CLARIFICATION
+    assert resp.total_price is None
+    assert resp.unit_selling_price is None
+    assert "servers do you need" in resp.clarification_question.lower()

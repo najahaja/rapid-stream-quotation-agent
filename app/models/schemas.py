@@ -1,10 +1,114 @@
 """Pydantic schemas for API request/response validation."""
 
+import logging
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
+
+# Sensible upper limits — well above any realistic single procurement request.
+# These guard against LLM hallucination of absurdly large numbers that would
+# produce meaningless price/stock calculations.
+_MAX_SERVERS = 1000
+_MAX_GPU_COUNT = 256
+
+
+def _validate_positive_int(v: object, field_name: str, max_limit: int) -> Optional[int]:
+    """
+    Validate that an extracted quantity or count is a positive whole integer.
+
+    - Rejects booleans (since bool is a subclass of int in Python: isinstance(True, int) is True).
+    - Explicitly supports int, integral float, integral Decimal, and integral numeric string.
+    - Rejects non-integral floats, Decimals (e.g. Decimal("2.5")), and decimal strings (e.g. "2.5").
+    - Rejects all unsupported types (lists, dicts, custom objects, etc.) without unrestricted coercion.
+    - Rejects values <= 0 or > max_limit.
+    - Returns None on invalid input so deterministic post-processing flags the field as missing.
+    """
+    if v is None:
+        return None
+
+    if isinstance(v, bool):
+        logger.warning(
+            "%s cannot be a boolean (got %r). Treating as missing.", field_name, v
+        )
+        return None
+
+    if isinstance(v, int):
+        n = v
+    elif isinstance(v, float):
+        if not v.is_integer():
+            logger.warning(
+                "%s must be a whole integer (got non-integral float %r). Treating as missing.",
+                field_name,
+                v,
+            )
+            return None
+        n = int(v)
+    elif isinstance(v, Decimal):
+        try:
+            if v % 1 != 0:
+                logger.warning(
+                    "%s must be a whole integer (got non-integral Decimal %r). Treating as missing.",
+                    field_name,
+                    v,
+                )
+                return None
+            n = int(v)
+        except (InvalidOperation, TypeError, ValueError):
+            logger.warning(
+                "%s could not be evaluated as integer Decimal: %r → None",
+                field_name,
+                v,
+            )
+            return None
+    elif isinstance(v, str):
+        cleaned = v.strip()
+        try:
+            if "." in cleaned:
+                f = float(cleaned)
+                if not f.is_integer():
+                    logger.warning(
+                        "%s must be a whole integer (got non-integral string %r). Treating as missing.",
+                        field_name,
+                        v,
+                    )
+                    return None
+                n = int(f)
+            else:
+                n = int(cleaned)
+        except (TypeError, ValueError):
+            logger.warning(
+                "%s could not be parsed as integer: %r → None", field_name, v
+            )
+            return None
+    else:
+        # Unsupported type: reject without attempting unrestricted int(v) coercion
+        logger.warning(
+            "%s received unsupported type %s: %r. Treating as missing.",
+            field_name,
+            type(v).__name__,
+            v,
+        )
+        return None
+
+    if n <= 0:
+        logger.warning(
+            "%s must be positive (got %d). Treating as missing.", field_name, n
+        )
+        return None
+    if n > max_limit:
+        logger.warning(
+            "%s %d exceeds upper limit %d. Treating as missing.",
+            field_name,
+            n,
+            max_limit,
+        )
+        return None
+    return n
 
 
 class QuotationStatus(str, Enum):
@@ -36,6 +140,16 @@ class ExtractionResult(BaseModel):
     # Tracks which fields were explicitly stated vs inferred
     explicitly_stated: list[str] = Field(default_factory=list)
     inferred: list[str] = Field(default_factory=list)
+
+    @field_validator("num_servers", mode="before")
+    @classmethod
+    def validate_num_servers(cls, v: object) -> Optional[int]:
+        return _validate_positive_int(v, "num_servers", _MAX_SERVERS)
+
+    @field_validator("gpu_count_per_server", mode="before")
+    @classmethod
+    def validate_gpu_count_per_server(cls, v: object) -> Optional[int]:
+        return _validate_positive_int(v, "gpu_count_per_server", _MAX_GPU_COUNT)
 
 
 class CatalogMatchResult(BaseModel):

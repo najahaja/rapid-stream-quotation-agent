@@ -84,18 +84,64 @@ def _merge_extractions(
         set(base.explicitly_stated) | set(update.explicitly_stated)
     )
     merged_data["inferred"] = list(set(base.inferred) | set(update.inferred))
+    combined_missing = list(set(base.missing_fields) | set(update.missing_fields))
+    merged_data["missing_fields"] = combined_missing
     merged = ExtractionResult(**merged_data)
 
-    # Recompute missing fields
-    missing = []
-    if not merged.gpu_family and not merged.sku:
-        missing.append("gpu_family")
-    if not merged.gpu_count_per_server and not merged.sku:
-        missing.append("gpu_count_per_server")
-    if not merged.num_servers:
-        missing.append("num_servers")
-    merged.missing_fields = missing
+    _recompute_missing_fields(merged)
     return merged
+
+
+# Explicit whitelist of valid extraction fields that may legitimately appear in missing_fields.
+# Arbitrary, internal, or unrecognized field names must never be preserved.
+VALID_EXTRACTION_FIELDS: frozenset[str] = frozenset(
+    {
+        "gpu_family",
+        "gpu_model",
+        "gpu_memory_gb",
+        "gpu_count_per_server",
+        "num_servers",
+        "ram_gb",
+        "sku",
+    }
+)
+
+
+def _recompute_missing_fields(extraction: ExtractionResult) -> None:
+    """
+    Deterministically recompute and update extraction.missing_fields.
+
+    - Enforces the explicit VALID_EXTRACTION_FIELDS whitelist; unknown or invalid
+      field names are never preserved.
+    - Preserves legitimate clarification requirements only while their corresponding
+      attribute on extraction remains genuinely missing (is None).
+    - Removes fields once the corresponding attribute is populated.
+    - Deterministically enforces required fields for catalog matching:
+        * gpu_family OR sku
+        * gpu_count_per_server OR sku
+        * num_servers
+    """
+    preserved: list[str] = []
+    for field in extraction.missing_fields or []:
+        if field not in VALID_EXTRACTION_FIELDS:
+            continue
+        val = getattr(extraction, field, None)
+        if val is None:
+            if field not in preserved:
+                preserved.append(field)
+
+    # Deterministically enforce required fields
+    if not extraction.gpu_family and not extraction.sku:
+        if "gpu_family" not in preserved:
+            preserved.append("gpu_family")
+    if not extraction.gpu_count_per_server and not extraction.sku:
+        if "gpu_count_per_server" not in preserved:
+            preserved.append("gpu_count_per_server")
+    if not extraction.num_servers:
+        if "num_servers" not in preserved:
+            preserved.append("num_servers")
+
+    extraction.missing_fields = preserved
 
 
 def _calculate_prices(sku: str, quantity: int) -> tuple[float | None, float | None]:
@@ -188,6 +234,16 @@ def process_quotation(
     # --- Extract from current message ---
     provider = get_active_extraction_provider()
     current_extraction = provider.extract(request.message)
+
+    # Defensively recompute missing_fields from actual field values.
+    # This guards against two scenarios:
+    #   1. A provider (mock or Gemini) returning missing_fields that does not
+    #      reflect the true field values.
+    #   2. The schema validator coercing an invalid value (e.g. num_servers=-1)
+    #      to None — the provider's missing_fields would not reflect that
+    #      correction because validation happens after extraction.
+    _recompute_missing_fields(current_extraction)
+
     logger.info("Extracted: %s", current_extraction)
 
     # --- Merge with accumulated state ---
