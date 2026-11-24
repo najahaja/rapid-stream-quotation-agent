@@ -200,7 +200,7 @@ class GeminiExtractionProvider(ExtractionProvider):
                 ):
                     self._handle_api_exception(exc)
                 if attempt < self.max_retries:
-                    backoff = 0.5 * (2**attempt)
+                    backoff = 1.0 * (2**attempt)
                     logger.warning(
                         "Transient Gemini API failure (attempt %d/%d), retrying in %.1fs: %s",
                         attempt + 1,

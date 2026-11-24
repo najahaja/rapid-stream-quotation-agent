@@ -53,9 +53,7 @@ def _is_gpu_model_match(requested_model: str, entry: CatalogEntry) -> bool:
     return norm_requested in aliases
 
 
-def _check_contradictions(
-    entry: CatalogEntry, extraction: ExtractionResult
-) -> str | None:
+def _check_contradictions(entry: CatalogEntry, extraction: ExtractionResult) -> str | None:
     """
     Validate explicitly-stated customer specs against a matched catalog entry.
 
